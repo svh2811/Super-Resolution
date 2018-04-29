@@ -99,6 +99,7 @@ ENV/
 
 # dataset
 data/BSD100_SR/
+data/BSDS300/
 
 # mypy
 .mypy_cache/
