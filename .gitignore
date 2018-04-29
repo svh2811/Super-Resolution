@@ -101,5 +101,8 @@ ENV/
 data/BSD100_SR/
 data/BSDS300/
 
+# test_figures
+tests/test_figures/*
+
 # mypy
 .mypy_cache/
