@@ -21,7 +21,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
 
-factor = 2  # 2 or 3 or 4
+factor = 4  # 2 or 3 or 4
 PLOT = True
 
 folder = "../../data/BSDS300/images/test/"
@@ -57,10 +57,9 @@ plot_freq = 50
 # skip, UNet, ResNet
 NET_TYPE = 'skip'
 
-# filenames = [16077, 37073, 101085, 189080,
-#             21077, 85048, 86000, 106024, 210088, 253027]
+filenames = [16077, 37073, 101085, 189080, 21077, 85048, 86000, 106024, 210088, 253027]
 
-filenames = [16077]
+# filenames = [16077]
 
 num_files = len(filenames)
 psnr_sum = 0.0
