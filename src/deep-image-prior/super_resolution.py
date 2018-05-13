@@ -12,7 +12,7 @@ import torch.optim
 
 import time
 
-from skimage.measure import compare_psnr
+from skimage.measure import compare_psnr, compare_ssim
 from models.downsampler import Downsampler
 
 from utils.sr_utils import *
@@ -41,35 +41,57 @@ tv_weight = 0.0
 OPTIMIZER = 'adam'
 
 if factor == 2:
-    num_iter = 150 + 1
+    num_iter = 1150 + 1
     reg_noise_std = 0.01
 elif factor == 4:
     num_iter = 2000 + 1
     reg_noise_std = 0.03
 elif factor == 8:
-    num_iter = 8000 + 1
+    num_iter = 2000 + 1
     reg_noise_std = 0.05
 else:
     assert False, 'We did not experiment with other factors'
 
-plot_freq = 50
+plot_freq = 500
 
 # skip, UNet, ResNet
 NET_TYPE = 'skip'
 
-filenames = [16077, 37073, 101085, 189080, 21077, 85048, 86000, 106024, 210088, 253027]
+filenames = [16077, 37073, 101085, 189080,
+             21077, 85048, 86000, 106024, 210088, 253027]
 
 # filenames = [16077]
 
 num_files = len(filenames)
 psnr_sum = 0.0
+ssim_sum = 0.0
 
 print("Factor: ", factor, " | Images: ", num_files,
       " | Iterations: ", num_iter, "\n\n")
 
 
 print(
-    "filename, psnr_nearest, psnr_bicubic, psnr_history[-1, :], final_psnr_HR, time_diff")
+    "filename, psnr_nearest, psnr_bicubic, psnr_history[-1, :], final_psnr_HR, " +
+    "ssim_nearest, ssim_bicubic, ssim_history[-1, :], final_ssim_HR, " +
+    "time_diff")
+
+
+def CharbonnierLoss(predict, target):
+    # epsilon=1e-3
+    return torch.mean(torch.sqrt(torch.pow((predict - target), 2) + 1e-6)).type(dtype)
+
+
+def cal_ssim(x, y):
+    x = x.transpose((1, 2, 0))
+    y = y.transpose((1, 2, 0))
+
+    ssim = compare_ssim(x, y, multichannel=True)
+
+    x = x.transpose((0, 1, 2))
+    y = y.transpose((0, 1, 2))
+
+    return ssim
+
 
 for filename in filenames:
     plot_prefix = test_folder + str(filename) + "_"
@@ -102,6 +124,9 @@ for filename in filenames:
 
         psnr_bicubic = compare_psnr(imgs['HR_np'], imgs['bicubic_np'])
         psnr_nearest = compare_psnr(imgs['HR_np'], imgs['nearest_np'])
+
+        ssim_bicubic = cal_ssim(imgs['HR_np'], imgs['bicubic_np'])
+        ssim_nearest = cal_ssim(imgs['HR_np'], imgs['nearest_np'])
 
         # print('PSNR bicubic: %.4f   PSNR nearest: %.4f' % (psnr_bicubic, psnr_nearest))
 
@@ -136,24 +161,32 @@ for filename in filenames:
             net_input.data = net_input_saved + \
                 (noise.normal_() * reg_noise_std)
 
-        out_HR = net(net_input)
-        out_LR = downsampler(out_HR)
+        out_HR = net(net_input)  # ([1, 3, H, W])
+        out_LR = downsampler(out_HR)  # ([1, 3, H/factor, W/factor])
 
         total_loss = mse(out_LR, img_LR_var)
+        # total_loss = CharbonnierLoss(out_LR, img_LR_var)
 
         if tv_weight > 0:
             total_loss += tv_weight * tv_loss(out_HR)
+
+        loss_history[i] = total_loss.data
 
         total_loss.backward()
 
         # Log
         psnr_LR = compare_psnr(imgs['LR_np'], var_to_np(out_LR))
         psnr_HR = compare_psnr(imgs['HR_np'], var_to_np(out_HR))
+
+        ssim_LR = cal_ssim(imgs['LR_np'], var_to_np(out_LR))
+        ssim_HR = cal_ssim(imgs['HR_np'], var_to_np(out_HR))
+
         # print('Iteration %05d    PSNR_LR %.3f   PSNR_HR %.3f'
         # % (i, psnr_LR, psnr_HR), '\r', end='')
 
         # History
         psnr_history[i, :] = [psnr_LR, psnr_HR]
+        ssim_history[i, :] = [ssim_LR, ssim_HR]
 
         if PLOT and i % plot_freq == 0:
             out_HR_np = var_to_np(out_HR)
@@ -168,6 +201,8 @@ for filename in filenames:
         return total_loss
 
     psnr_history = np.zeros((num_iter, 2))
+    ssim_history = np.zeros((num_iter, 2))
+    loss_history = np.zeros((num_iter,))
     net_input_saved = net_input.data.clone()
     noise = net_input.data.clone()
 
@@ -180,10 +215,14 @@ for filename in filenames:
     time_diff = time.time() - start
 
     out_HR_np = var_to_np(net(net_input))
+
     final_psnr_HR = compare_psnr(imgs['HR_np'], out_HR_np)
+    final_ssim_HR = cal_ssim(imgs['HR_np'], out_HR_np)
+
     out_HR_np = np.clip(out_HR_np, 0, 1)
 
     psnr_sum += final_psnr_HR
+    ssim_sum += final_ssim_HR
 
     result_deep_prior = put_in_center(out_HR_np, imgs['HR_np'].shape[1:])
 
@@ -191,15 +230,21 @@ for filename in filenames:
                     nrow=4,
                     factor=19,
                     save_plot=True,
-                    fname=plot_prefix + "3.png")
+                    fname=plot_prefix + "3_nearest_bicubic_out-HR_gt-HR.png")
 
-    print(filename, psnr_nearest, psnr_bicubic,
-          psnr_history[-1, :], final_psnr_HR, time_diff)
+    print(filename,
+          psnr_nearest, psnr_bicubic,
+          psnr_history[-1, :], final_psnr_HR,
+          ssim_nearest, ssim_bicubic,
+          ssim_history[-1, :], final_ssim_HR,
+          time_diff)
 
     # os.system('spd-say
     # \"U-Net with Skip Connections has increased resolutions of 1 images\"')
 
     np.save(plot_prefix + "_psnr_history", psnr_history)
+    np.save(plot_prefix + "_ssim_history", ssim_history)
+    np.save(plot_prefix + "_loss_history", loss_history)
 
     t = np.arange(num_iter)
 
@@ -226,7 +271,62 @@ for filename in filenames:
 
     plt.legend(loc=2)
 
-    plt.savefig(fname=plot_prefix + "4.png",
+    plt.savefig(fname=plot_prefix + "4_1.png",
+                transparent=True,
+                bbox_inches='tight',
+                pad_inches=0)
+
+    plt.close('all')
+
+    ##############################################
+
+    fig = plt.figure(num="ssim_LR and ssim_HR",
+                     figsize=(23, 12))
+    ax = fig.add_subplot(111)
+
+    ax.plot(t,
+            ssim_history[:, 0].reshape(None),
+            c='r',
+            ls='-',
+            lw=0.5,
+            label='ssim_LR')
+
+    ax.plot(t,
+            ssim_history[:, 1].reshape(None),
+            c='b',
+            ls='-',
+            lw=0.5,
+            label='ssim_HR')
+
+    plt.xlabel('Iterations')
+    plt.ylabel('SSIM')
+
+    plt.legend(loc=2)
+
+    plt.savefig(fname=plot_prefix + "4_2.png",
+                transparent=True,
+                bbox_inches='tight',
+                pad_inches=0)
+
+    plt.close('all')
+
+    ###############################################
+
+    fig = plt.figure(num="Loss",
+                     figsize=(23, 12))
+    ax = fig.add_subplot(111)
+
+    ax.plot(t,
+            loss_history,
+            c='r',
+            ls='-',
+            lw=0.5,
+            label='loss')
+
+    plt.xlabel('Iterations')
+    plt.ylabel('Loss')
+
+    plt.savefig(fname=plot_prefix + "4_3.png",
                 transparent=True,
                 bbox_inches='tight',
                 pad_inches=0)
@@ -242,5 +342,8 @@ for filename in filenames:
 
 print("\n\nAverage psnr for {} images : {}".format(num_files,
                                                    psnr_sum / num_files))
+
+print("\n\nAverage ssim for {} images : {}".format(num_files,
+                                                   ssim_sum / num_files))
 
 # os.system('spd-say \"Job Super Resolution completed\"')
