@@ -99,6 +99,13 @@ ENV/
 
 # dataset
 data/BSD100_SR/
+data/BSDS300/
+
+# test_figures
+tests/test_figures/*
 
 # mypy
 .mypy_cache/
+
+# pem files
+*.pem
